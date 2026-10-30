@@ -696,8 +696,17 @@ class PDFDocument:
         password: str = "",
         caching: bool = True,
         fallback: bool = True,
+        xref_pos: int | None = None,
+        follow_prev: bool = True,
     ) -> None:
-        """Set the document to use a given PDFParser object."""
+        """Set the document to use a given PDFParser object.
+
+        If xref_pos is given, the cross-reference section at that exact
+        offset is used instead of scanning the end of the file. This is
+        used when parsing linearized PDFs whose first cross-reference
+        section is followed by the marker "startxref 0". When follow_prev
+        is False, any /Prev or /XRefStm pointer in the trailer is ignored.
+        """
         self.caching = caching
         self.xrefs: list[PDFBaseXRef] = []
         self.info = []
@@ -714,8 +723,11 @@ class PDFDocument:
         # (maybe multiple times) at the end of the document.
         self._xrefpos: set[int] = set()
         try:
-            pos = self.find_xref(parser)
-            self.read_xref_from(parser, pos, self.xrefs)
+            if xref_pos is not None:
+                pos = xref_pos
+            else:
+                pos = self.find_xref(parser)
+            self.read_xref_from(parser, pos, self.xrefs, follow_prev=follow_prev)
         except PDFNoValidXRef:
             if fallback:
                 parser.fallback = True
@@ -987,6 +999,7 @@ class PDFDocument:
         parser: PDFParser,
         start: int,
         xrefs: list[PDFBaseXRef],
+        follow_prev: bool = True,
     ) -> None:
         """Reads XRefs from the given location."""
         if start in self._xrefpos:
@@ -1014,13 +1027,25 @@ class PDFDocument:
         xrefs.append(xref)
         trailer = xref.get_trailer()
         log.debug("trailer: %r", trailer)
-        if "XRefStm" in trailer:
-            pos = int_value(trailer["XRefStm"])
-            self.read_xref_from(parser, pos, xrefs)
-        if "Prev" in trailer:
-            # find previous xref
-            pos = int_value(trailer["Prev"])
-            self.read_xref_from(parser, pos, xrefs)
+        if follow_prev:
+            if "XRefStm" in trailer:
+                pos = int_value(trailer["XRefStm"])
+                self.read_xref_from(parser, pos, xrefs)
+            if "Prev" in trailer:
+                # find previous xref
+                pos = int_value(trailer["Prev"])
+                self.read_xref_from(parser, pos, xrefs)
+
+    def append_xref(self, parser: PDFParser, start: int) -> None:
+        """Append a cross-reference section that became available later.
+
+        This is used while streaming linearized PDFs: once the end of the
+        file has been downloaded, the main cross-reference section is added
+        to the already loaded first-page section. Chain links (/Prev,
+        /XRefStm) are deliberately not followed because they point back at
+        sections that are already loaded.
+        """
+        self.read_xref_from(parser, start, self.xrefs, follow_prev=False)
 
 
 class PageLabels(NumberTree):

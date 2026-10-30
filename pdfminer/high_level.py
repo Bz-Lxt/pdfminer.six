@@ -15,6 +15,7 @@ from pdfminer.converter import (
 )
 from pdfminer.image import ImageWriter
 from pdfminer.layout import LAParams, LTPage
+from pdfminer.linearized import ByteRangeSource, extract_pages_range
 from pdfminer.pdfdevice import PDFDevice, TagExtractor
 from pdfminer.pdfexceptions import PDFValueError
 from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
@@ -188,7 +189,7 @@ def extract_text(
 
 
 def extract_pages(
-    pdf_file: FileOrName,
+    pdf_file: FileOrName | ByteRangeSource,
     password: str = "",
     page_numbers: Container[int] | None = None,
     maxpages: int = 0,
@@ -198,7 +199,11 @@ def extract_pages(
     """Extract and yield LTPage objects
 
     :param pdf_file: Either a file path or a file-like object for the PDF file
-        to be worked on.
+        to be worked on. A byte-range source (an object with a
+        ``read_range(offset, length)`` method, see
+        :class:`pdfminer.linearized.ByteRangeSource`) is also accepted; this
+        streams a partially downloaded linearized ("Fast Web View") PDF,
+        yielding its first page first and fetching later pages on demand.
     :param password: For encrypted PDFs, the password to decrypt.
     :param page_numbers: List of zero-indexed page numbers to extract.
     :param maxpages: The maximum number of pages to parse
@@ -209,6 +214,18 @@ def extract_pages(
     """
     if laparams is None:
         laparams = LAParams()
+
+    if hasattr(pdf_file, "read_range"):
+        # A byte-range source over a (partially downloaded) linearized PDF.
+        yield from extract_pages_range(
+            pdf_file,
+            password=password,
+            page_numbers=page_numbers,
+            maxpages=maxpages,
+            caching=caching,
+            laparams=laparams,
+        )
+        return
 
     with open_filename(pdf_file, "rb") as fp:
         fp = cast(BinaryIO, fp)  # we opened in binary mode
